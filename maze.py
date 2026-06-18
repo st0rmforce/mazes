@@ -7,7 +7,7 @@ RIGHT = 1
 DOWN = 2
 LEFT = 3
 
-MIN_SIZE = 15
+MIN_SIZE = 16
 MAX_SIZE = 26
 
 BIG_DISTANCE = 9999999
@@ -102,15 +102,19 @@ class Maze:
         self.width = self.rng.randint(MIN_SIZE, MAX_SIZE)
         self.height = self.rng.randint(MIN_SIZE, MAX_SIZE)
         self.grid: list[list[Square]] = []
+        self.all_squares: list[Square] = []
         self.max_distances = {}
         for x in range(self.width):
             self.grid.append([])
             for y in range(self.height):
                 self.grid[-1].append(Square(x, y, self))
+                self.all_squares.append(self.grid[-1][-1])
+        self.rng.shuffle(self.all_squares)
         for col in self.grid:
             for sq in col:
                 sq.set_directions()
         self.entrance = self.rng.choice(self.rng.choice(self.grid))
+        self.exit = self.rng.choice(self.rng.choice(self.grid))
         base_key = (self.entrance.x, self.entrance.y, 0)
         self.find_distances(self.entrance, 0)
         blocked = self.find_blocked_cells(self.entrance, 0)
@@ -132,19 +136,28 @@ class Maze:
             self.find_distances(self.entrance, 0)
             blocked = self.find_blocked_cells(self.entrance, 0)
             self.rng.shuffle(blocked)
+        self.full_dist_wipe()
         for x in range(self.width):
             self.find_distances(self.grid[x][0], 0)
             self.find_distances(self.grid[x][self.height - 1], 0)
         for y in range(self.height):
             self.find_distances(self.grid[0][y], 0)
             self.find_distances(self.grid[self.width - 1][y], 0)
+        self.choose_start_end()
 
+    def choose_start_end(self):
         best = 0
         squares = list(self.max_distances.keys())
-        self.rng.shuffle( squares)
+        self.rng.shuffle(squares)
         for k in squares:
             if self.max_distances[k] > best:
                 self.entrance = self.grid[k[0]][k[1]]
+        furthest = 0
+        for sq in self.all_squares:
+            dist = sq.distances.get((self.entrance.x, self.entrance.y, 0), -1)
+            if dist > furthest:
+                self.exit = sq
+                furthest = dist
 
     def wipe_distances(self, start_square: Square, keys: int):
         key = (start_square.x, start_square.y, keys)
@@ -209,8 +222,20 @@ class Maze:
                         canvas.set_at((corner[0] + i, corner[1] + 4), "black")
                 distance = sq.distances.get(distance_key, 0)
                 temperature = pygame.Color("red")
-                temperature.hsva = ((distance * 4)%360, 100, 100, 100)
+                temperature.hsva = ((distance * 4) % 360, 100, 100, 100)
                 canvas.set_at((corner[0] + 2, corner[1] + 2), temperature)
+                if self.exit == sq:
+                    for x in range(1, 4):
+                        for y in range(1, 4):
+                            canvas.set_at(
+                                (corner[0] + x, corner[1] + y), pygame.Color("red")
+                            )
+                if self.entrance == sq:
+                    for x in range(1, 4):
+                        for y in range(1, 4):
+                            canvas.set_at(
+                                (corner[0] + x, corner[1] + y), pygame.Color("green")
+                            )
 
         pygame.image.save(
             pygame.transform.scale(canvas, (pix_w * 5, pix_h * 5)), f"{name}.png"
@@ -229,5 +254,5 @@ def find_seed(width, height) -> str:
     return seed
 
 
-test = Maze(find_seed(MAX_SIZE,MAX_SIZE))
+test = Maze()
 test.draw_maze("longest")
