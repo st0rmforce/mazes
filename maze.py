@@ -1,6 +1,7 @@
 from __future__ import annotations
 import random
 import pygame
+import numbercombos
 
 UP = 0
 RIGHT = 1
@@ -9,6 +10,7 @@ LEFT = 3
 
 MIN_SIZE = 16
 MAX_SIZE = 26
+MAX_DOORS = 6
 
 BIG_DISTANCE = 9999999
 
@@ -34,9 +36,15 @@ class Square:
         self.directions: list[Square | None] = [None] * 4
         self.distances = {}
         self.blocked = []
-        self.doors = [0] * 4
+        self.doors = [-1] * 4
         for _ in range(4):
             self.blocked.append(bool(self.maze.rng.randint(0, 2)))
+
+    def __str__(self):
+        return f"Square {self.x},{self.y}"
+
+    def __repr__(self):
+        return f"Square {self.x}x{self.y}"
 
     def set_directions(self):
         if self.x > 0:
@@ -85,10 +93,12 @@ class Square:
         other: Square = self.directions[direction]
         other.doors[reverse(direction)] = key_index
         other.blocked[reverse(direction)] = False
+        self.maze.door_locations.append((self, key_index))
+        self.maze.door_locations.append((other, key_index))
 
     def can_go_through(self, direction, key_mask):
         if not self.blocked[direction]:
-            if not self.doors[direction] or pow(2, self.doors[direction]) & key_mask:
+            if self.doors[direction] == -1 or pow(2, self.doors[direction]) & key_mask:
                 return True
         return False
 
@@ -101,8 +111,12 @@ class Maze:
         self.rng = random.Random(seed)
         self.width = self.rng.randint(MIN_SIZE, MAX_SIZE)
         self.height = self.rng.randint(MIN_SIZE, MAX_SIZE)
+        self.door_count = self.rng.randint(1, MAX_DOORS)
         self.grid: list[list[Square]] = []
         self.all_squares: list[Square] = []
+        self.key_locations: list[Square] = []
+        self.door_locations = []
+        self.longest_path = 0
         self.max_distances = {}
         for x in range(self.width):
             self.grid.append([])
@@ -136,6 +150,44 @@ class Maze:
             self.find_distances(self.entrance, 0)
             blocked = self.find_blocked_cells(self.entrance, 0)
             self.rng.shuffle(blocked)
+
+        self.longest_path = self.choose_start_end()
+        self.find_shortcuts(doors=self.door_count)
+        best = None
+        for i in range(75):
+            self.full_dist_wipe()
+            self.place_keys()
+            routes = self.shortest_routes()
+            if routes:
+                shortest = sorted(routes)[0]
+
+                pickups = len(shortest[1])
+            else:
+                shortest = [self.exit.distances[(self.entrance.x, self.entrance.y, 0)]]
+                pickups = 0
+            if best is None:
+                best = {
+                    "shortest": shortest[0],
+                    "pickups": pickups,
+                    "key_positions": self.key_locations.copy(),
+                }
+            else:
+                if pickups > best["pickups"]:
+                    best = {
+                        "shortest": shortest[0],
+                        "pickups": pickups,
+                        "key_positions": self.key_locations.copy(),
+                    }
+                elif pickups == best["pickups"] and shortest[0] < best["shortest"]:
+                    best = {
+                        "shortest": shortest[0],
+                        "pickups": pickups,
+                        "key_positions": self.key_locations.copy(),
+                    }
+        self.key_locations = best["key_positions"]
+        print(best)
+
+    def choose_start_end(self) -> int:
         self.full_dist_wipe()
         for x in range(self.width):
             self.find_distances(self.grid[x][0], 0)
@@ -143,9 +195,6 @@ class Maze:
         for y in range(self.height):
             self.find_distances(self.grid[0][y], 0)
             self.find_distances(self.grid[self.width - 1][y], 0)
-        self.choose_start_end()
-
-    def choose_start_end(self):
         best = 0
         squares = list(self.max_distances.keys())
         self.rng.shuffle(squares)
@@ -158,6 +207,28 @@ class Maze:
             if dist > furthest:
                 self.exit = sq
                 furthest = dist
+        return furthest
+
+    def find_shortcuts(self, doors=6):
+        keys = 0
+        start = self.entrance
+        for key in range(doors):
+            self.wipe_distances(start, keys)
+            self.find_distances(start, keys)
+            shortcuts: list[tuple[int, int, int, int]] = []
+            for sq in self.all_squares:
+                for dir in range(4):
+                    if sq.directions[dir]:
+                        a = sq.distances.get((start.x, start.y, keys))
+                        b = sq.directions[dir].distances.get((start.x, start.y, keys))
+                        if None not in (a, b) and abs(a - b) > 10:
+                            shortcuts.append((abs(a - b), sq.x, sq.y, dir))
+            if shortcuts:
+                shortcuts.sort(reverse=True)
+                door_params = shortcuts[0]
+                sq = self.grid[door_params[1]][door_params[2]]
+                sq.add_door(door_params[3], key)
+            keys += pow(2, key)
 
     def wipe_distances(self, start_square: Square, keys: int):
         key = (start_square.x, start_square.y, keys)
@@ -201,7 +272,12 @@ class Maze:
         pix_h = self.height * 5
         canvas = pygame.Surface((pix_w, pix_h))
         canvas.fill("white")
-        distance_key = (start_square.x, start_square.y, keys)
+
+        def key_colour(key_index):
+            col = pygame.Color("red")
+            col.hsva = ((key_index * 60) % 360, 100, 80, 100)
+            return col
+
         for sq_y in range(self.height):
             for sq_x in range(self.width):
                 sq = self.grid[sq_x][sq_y]
@@ -220,10 +296,20 @@ class Maze:
                         canvas.set_at((corner[0], corner[1] + i), "black")
                     if sq.blocked[DOWN]:
                         canvas.set_at((corner[0] + i, corner[1] + 4), "black")
-                distance = sq.distances.get(distance_key, 0)
-                temperature = pygame.Color("red")
-                temperature.hsva = ((distance * 4) % 360, 100, 100, 100)
-                canvas.set_at((corner[0] + 2, corner[1] + 2), temperature)
+                    if sq.doors[UP] >= 0:
+                        canvas.set_at(
+                            (corner[0] + i, corner[1]), key_colour(sq.doors[UP])
+                        )
+                    if sq.doors[RIGHT] >= 0:
+                        canvas.set_at(
+                            (corner[0] + 4, corner[1] + i), key_colour(sq.doors[RIGHT])
+                        )
+                   
+                if sq in self.key_locations:
+                    canvas.set_at(
+                                (corner[0] + 2, corner[1] + 2), key_colour(self.key_locations.index(sq))
+                            )
+
                 if self.exit == sq:
                     for x in range(1, 4):
                         for y in range(1, 4):
@@ -241,6 +327,39 @@ class Maze:
             pygame.transform.scale(canvas, (pix_w * 5, pix_h * 5)), f"{name}.png"
         )
 
+    def place_keys(self):
+        self.key_locations = []
+        self.find_distances(self.entrance, 0)
+        for i in range(self.door_count):
+            pick = self.rng.choice(self.all_squares)
+            while pick in self.key_locations:
+                pick = self.rng.choice(self.all_squares)
+            self.key_locations.append(pick)
+
+    def shortest_routes(self):
+        best = []
+        base_len = None
+        for keyset in numbercombos.get_combinations(self.door_count):
+            count = 0
+            begin = self.entrance
+            target = begin
+            keys = 0
+            for digit in keyset:
+                begin = target
+                target = self.key_locations[digit - 1]
+                keys += pow(2, digit - 1)
+                self.find_distances(begin, keys)
+                count += target.distances[(begin.x, begin.y, keys)]
+            begin = target
+            target = self.exit
+            self.find_distances(begin, keys)
+            count += target.distances[(begin.x, begin.y, keys)]
+            if base_len is None:
+                base_len = count
+            if count < base_len:
+                best.append((count, tuple(keyset)))
+        return best
+
 
 def find_seed(width, height) -> str:
     w = -1
@@ -254,5 +373,6 @@ def find_seed(width, height) -> str:
     return seed
 
 
+good = False
 test = Maze()
-test.draw_maze("longest")
+test.draw_maze(0)
