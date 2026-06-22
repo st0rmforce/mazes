@@ -1,5 +1,6 @@
 from __future__ import annotations
 import random
+import time
 import pygame
 import numbercombos
 
@@ -10,7 +11,7 @@ LEFT = 3
 
 MIN_SIZE = 16
 MAX_SIZE = 26
-MAX_DOORS = 6
+MAX_DOORS = 8
 
 BIG_DISTANCE = 9999999
 
@@ -153,39 +154,24 @@ class Maze:
 
         self.longest_path = self.choose_start_end()
         self.find_shortcuts(doors=self.door_count)
-        best = None
-        for i in range(75):
+        best = -1
+        key_positions = []
+        st_time=time.time()
+        pic_index = 0
+        while time.time() < st_time+30:
             self.full_dist_wipe()
             self.place_keys()
-            routes = self.shortest_routes()
-            if routes:
-                shortest = sorted(routes)[0]
+            saved = self.shortest_routes()
+            if saved > best:
+                self.draw_maze(pic_index)
+                pic_index+=1
+                best = saved
+                key_positions = self.key_locations.copy()
 
-                pickups = len(shortest[1])
-            else:
-                shortest = [self.exit.distances[(self.entrance.x, self.entrance.y, 0)]]
-                pickups = 0
-            if best is None:
-                best = {
-                    "shortest": shortest[0],
-                    "pickups": pickups,
-                    "key_positions": self.key_locations.copy(),
-                }
-            else:
-                if pickups > best["pickups"]:
-                    best = {
-                        "shortest": shortest[0],
-                        "pickups": pickups,
-                        "key_positions": self.key_locations.copy(),
-                    }
-                elif pickups == best["pickups"] and shortest[0] < best["shortest"]:
-                    best = {
-                        "shortest": shortest[0],
-                        "pickups": pickups,
-                        "key_positions": self.key_locations.copy(),
-                    }
-        self.key_locations = best["key_positions"]
+        self.key_locations = key_positions
         print(best)
+        print("doors",self.door_locations)
+        print("keys",self.key_locations)
 
     def choose_start_end(self) -> int:
         self.full_dist_wipe()
@@ -304,11 +290,12 @@ class Maze:
                         canvas.set_at(
                             (corner[0] + 4, corner[1] + i), key_colour(sq.doors[RIGHT])
                         )
-                   
+
                 if sq in self.key_locations:
                     canvas.set_at(
-                                (corner[0] + 2, corner[1] + 2), key_colour(self.key_locations.index(sq))
-                            )
+                        (corner[0] + 2, corner[1] + 2),
+                        key_colour(self.key_locations.index(sq)),
+                    )
 
                 if self.exit == sq:
                     for x in range(1, 4):
@@ -332,14 +319,24 @@ class Maze:
         self.find_distances(self.entrance, 0)
         for i in range(self.door_count):
             pick = self.rng.choice(self.all_squares)
-            while pick in self.key_locations:
+            while pick in self.key_locations or pick == self.entrance or pick == self.exit:
                 pick = self.rng.choice(self.all_squares)
             self.key_locations.append(pick)
 
     def shortest_routes(self):
-        best = []
+
         base_len = None
-        for keyset in numbercombos.get_combinations(self.door_count):
+        savings = 0
+        combos = numbercombos.get_combinations(self.door_count)
+        if len(combos) >10000:
+            picks = []
+            for i in range(8000):
+                pick = self.rng.choice(combos)
+                while pick in picks:
+                    pick = self.rng.choice(combos)
+                picks.append(pick)
+            combos = picks
+        for keyset in combos:
             count = 0
             begin = self.entrance
             target = begin
@@ -356,9 +353,8 @@ class Maze:
             count += target.distances[(begin.x, begin.y, keys)]
             if base_len is None:
                 base_len = count
-            if count < base_len:
-                best.append((count, tuple(keyset)))
-        return best
+            savings = max(savings,base_len-count)
+        return savings
 
 
 def find_seed(width, height) -> str:
@@ -375,4 +371,4 @@ def find_seed(width, height) -> str:
 
 good = False
 test = Maze()
-test.draw_maze(0)
+test.draw_maze("finished")
