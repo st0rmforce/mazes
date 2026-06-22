@@ -261,7 +261,8 @@ class Maze:
 
         def key_colour(key_index):
             col = pygame.Color("red")
-            col.hsva = ((key_index * 60) % 360, 100, 80, 100)
+            step = 360 / self.door_count
+            col.hsva = ((key_index * step) % 360, 100, 99, 100)
             return col
 
         for sq_y in range(self.height):
