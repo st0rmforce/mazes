@@ -10,7 +10,7 @@ DOWN = 2
 LEFT = 3
 
 MIN_SIZE = 16
-MAX_SIZE = 26
+MAX_SIZE = 28
 MAX_DOORS = 8
 
 BIG_DISTANCE = 9999999
@@ -39,7 +39,7 @@ class Square:
         self.blocked = []
         self.doors = [-1] * 4
         for _ in range(4):
-            self.blocked.append(bool(self.maze.rng.randint(0, 2)))
+            self.blocked.append(bool(self.maze.rng.randint(0, maze.tightness)))
 
     def __str__(self):
         return f"Square {self.x},{self.y}"
@@ -113,9 +113,11 @@ class Maze:
         self.width = self.rng.randint(MIN_SIZE, MAX_SIZE)
         self.height = self.rng.randint(MIN_SIZE, MAX_SIZE)
         self.door_count = self.rng.randint(1, MAX_DOORS)
+        self.tightness = self.rng.choice((1,2,2,3,7))
         self.grid: list[list[Square]] = []
         self.all_squares: list[Square] = []
         self.key_locations: list[Square] = []
+        self.dead_ends: list[Square] = []
         self.door_locations = []
         self.longest_path = 0
         self.max_distances = {}
@@ -153,25 +155,32 @@ class Maze:
             self.rng.shuffle(blocked)
 
         self.longest_path = self.choose_start_end()
-        self.find_shortcuts(doors=self.door_count)
+        self.door_count = self.find_shortcuts(doors=self.door_count)
+        self.distribute_keys()
+        self.find_dead_ends()
+        self.move_keys_into_dead_ends()
+
+    def distribute_keys(self):
         best = -1
         key_positions = []
-        st_time=time.time()
+        st_time = time.time()
         pic_index = 0
-        while time.time() < st_time+30:
+        self.best_keysets = []
+        while time.time() < st_time + 3: #TODO turn back to 30
             self.full_dist_wipe()
             self.place_keys()
             saved = self.shortest_routes()
             if saved > best:
+                self.best_keysets = self.good_keysets
                 self.draw_maze(pic_index)
-                pic_index+=1
+                pic_index += 1
                 best = saved
                 key_positions = self.key_locations.copy()
 
         self.key_locations = key_positions
         print(best)
-        print("doors",self.door_locations)
-        print("keys",self.key_locations)
+        print("doors", self.door_locations)
+        print("keys", self.key_locations)
 
     def choose_start_end(self) -> int:
         self.full_dist_wipe()
@@ -198,6 +207,7 @@ class Maze:
     def find_shortcuts(self, doors=6):
         keys = 0
         start = self.entrance
+        added = 0
         for key in range(doors):
             self.wipe_distances(start, keys)
             self.find_distances(start, keys)
@@ -214,7 +224,9 @@ class Maze:
                 door_params = shortcuts[0]
                 sq = self.grid[door_params[1]][door_params[2]]
                 sq.add_door(door_params[3], key)
+                added += 1
             keys += pow(2, key)
+        return added
 
     def wipe_distances(self, start_square: Square, keys: int):
         key = (start_square.x, start_square.y, keys)
@@ -320,23 +332,23 @@ class Maze:
         self.find_distances(self.entrance, 0)
         for i in range(self.door_count):
             pick = self.rng.choice(self.all_squares)
-            while pick in self.key_locations or pick == self.entrance or pick == self.exit:
+            while (
+                pick in self.key_locations or pick == self.entrance or pick == self.exit
+            ):
                 pick = self.rng.choice(self.all_squares)
             self.key_locations.append(pick)
 
-    def shortest_routes(self):
-
-        base_len = None
+    def shortest_routes(self, debug=None):
+        self.find_distances(self.entrance, 0)
+        self.good_keysets = []
+        base_len = self.exit.distances[(self.entrance.x, self.entrance.y, 0)]
         savings = 0
-        combos = numbercombos.get_combinations(self.door_count)
-        if len(combos) >10000:
-            picks = []
-            for i in range(8000):
-                pick = self.rng.choice(combos)
-                while pick in picks:
-                    pick = self.rng.choice(combos)
-                picks.append(pick)
-            combos = picks
+        if not debug:
+            combos = numbercombos.get_combinations(self.door_count)
+
+        else:
+            combos = debug
+            combos.append([])
         for keyset in combos:
             count = 0
             begin = self.entrance
@@ -345,31 +357,69 @@ class Maze:
             for digit in keyset:
                 begin = target
                 target = self.key_locations[digit - 1]
-                keys += pow(2, digit - 1)
                 self.find_distances(begin, keys)
+                if debug:
+                    print(
+                        f"{target.distances[(begin.x, begin.y, keys)]} steps from {begin} to {target}"
+                    )
                 count += target.distances[(begin.x, begin.y, keys)]
+                keys += pow(2, digit - 1)
             begin = target
             target = self.exit
             self.find_distances(begin, keys)
+            if debug:
+                print(
+                    f"{target.distances[(begin.x, begin.y, keys)]} steps from {begin} to {target}"
+                )
             count += target.distances[(begin.x, begin.y, keys)]
-            if base_len is None:
-                base_len = count
-            savings = max(savings,base_len-count)
+            if base_len - count > savings and base_len*0.66 > base_len - count:
+                savings = base_len - count
+                print(keyset, "saved", savings)
+                self.good_keysets.append(keyset)
         return savings
 
+    def find_dead_ends(self):
+        self.dead_ends = []
+        for sq in self.all_squares:
+            if sq.blocked.count(True) == 3:
+                self.dead_ends.append(sq)
 
-def find_seed(width, height) -> str:
+    def move_keys_into_dead_ends(self):
+        new_layout: list[Square] = []
+        for key in self.key_locations:
+            if key in self.dead_ends:
+                new_layout.append(key)
+                continue
+            self.wipe_distances(key, 0)
+            self.find_distances(key, 0)
+            closest = (9, key)
+            for dead_end in self.dead_ends:
+                dist = dead_end.distances.get((key.x, key.y, 0), BIG_DISTANCE)
+                if (
+                    dead_end not in self.key_locations
+                    and dead_end not in new_layout
+                    and dist < closest[0]
+                ):
+                    closest = (dist, dead_end)
+            new_layout.append(closest[1])
+        self.key_locations = new_layout
+
+
+def find_seed(width, height, keys: int | None = None) -> str:
     w = -1
     h = -1
+    k = -1
     seed = ""
-    while w != width or h != height:
+    while w != width or h != height or (keys is not None and k != keys):
         seed = random_string(20)
         rng = random.Random(seed)
         w = rng.randint(MIN_SIZE, MAX_SIZE)
         h = rng.randint(MIN_SIZE, MAX_SIZE)
+        k = rng.randint(1, MAX_DOORS)
     return seed
 
 
 good = False
-test = Maze()
+test = Maze("hello")
 test.draw_maze("finished")
+test.shortest_routes(debug=test.best_keysets)
