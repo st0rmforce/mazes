@@ -7,7 +7,6 @@ def number_to_base(number: int, base: int) -> list[int]:
     digits = []
     while number:
         digits.append(number % base)
-        number -= number % base
         number //= base
     digits.reverse()
     return digits
